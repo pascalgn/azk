@@ -31,13 +31,20 @@ main() {
 }
 
 list() {
-    account="$(az account show)"
-    subscriptionName="$(echo "${account}" | jq -r .name)"
-    subscriptionId="$(echo "${account}" | jq -r .id)"
+    currentTenant="$(az account show | jq -r .tenantId)"
 
-    echo "${subscriptionName} (${subscriptionId})"
+    subscriptions="$(az account list | jq -r ".[] | select(.tenantId == \"${currentTenant}\") | .id")"
+    for subscriptionId in ${subscriptions}; do
+        names="$(az aks list --subscription "${subscriptionId}" | jq -r .[].name)"
 
-    az aks list | jq -r .[].name
+        echo "Subscription: ${subscriptionId}"
+        for name in ${names}; do
+            echo " - ${name}"
+            echo "   az aks get-credentials --subscription '${subscriptionId}' --resource-group '${name}' --name '${name}'"
+            echo "   kubectl config set-context '${name}' --namespace=default"
+        done
+        echo
+    done
 }
 
 create() {
@@ -174,6 +181,7 @@ setup_aad() {
 }
 
 read_config() {
+    name=""
     aadTenantId=""
     aadServerAppId=""
     aadServerAppSecret=""
@@ -319,8 +327,15 @@ apply_clusterrolebinding() {
         --subscription "${subscription}" \
         --resource-group "${aksName}" \
         --name "${aksName}" \
-        --file "${kubeconfigFile}" --admin ||
+        --file "${kubeconfigFile}" \
+        --admin ||
         fatal "Could not get credentials!"
+    get_clusterrolebinding "${1}" |
+        kubectl --kubeconfig "${kubeconfigFile}" apply -f -
+    rm -f "${kubeconfigFile}"
+}
+
+get_clusterrolebinding() {
     echo "apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -329,11 +344,13 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
-subjects:
-- apiGroup: rbac.authorization.k8s.io
+subjects:"
+    IFS=" "
+    for id in $1; do
+        echo "- apiGroup: rbac.authorization.k8s.io
   kind: Group
-  name: $1" | kubectl --kubeconfig "${kubeconfigFile}" apply -f -
-    rm -f "${kubeconfigFile}"
+  name: $id"
+    done
 }
 
 info() {
